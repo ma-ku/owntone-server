@@ -197,6 +197,10 @@ struct airplay_extra
   uint16_t wanted_metadata;
   bool supports_auth_setup;
   bool supports_pairing_transient;
+
+  bool is_grouped;
+  char *group_name;
+  char *group_id;
 };
 
 struct airplay_master_session
@@ -3770,6 +3774,23 @@ airplay_device_cb(const char *name, const char *type, const char *domain, const 
 
   keyval_clear(&features_kv);
 
+  // Grouping 
+  re->is_grouped = false;
+  const char *groupid = keyval_get(txt, "gid");
+  if (groupid)
+    {
+      DPRINTF(E_INFO, L_AIRPLAY, "Device '%s' is member of group\n", name);
+
+      const char *groupname = keyval_get(txt, "gpn");
+
+      if (groupname) 
+        {
+          re->is_grouped = true;
+          re->group_id = strdup(groupid);
+          re->group_name = strdup(groupname);
+        }
+    }
+ 
   // Only default audio quality supported so far
   rd->quality.sample_rate = AIRPLAY_QUALITY_SAMPLE_RATE_DEFAULT;
   rd->quality.bits_per_sample = AIRPLAY_QUALITY_BITS_PER_SAMPLE_DEFAULT;
