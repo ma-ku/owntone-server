@@ -114,6 +114,8 @@ enum airplay_devtype {
   AIRPLAY_DEV_APPLETV,
   AIRPLAY_DEV_APPLETV4,
   AIRPLAY_DEV_HOMEPOD,
+  AIRPLAY_DEV_HOMEPOD_MINI,
+  AIRPLAY_DEV_MAC,
   AIRPLAY_DEV_OTHER,
 };
 
@@ -197,10 +199,6 @@ struct airplay_extra
   uint16_t wanted_metadata;
   bool supports_auth_setup;
   bool supports_pairing_transient;
-
-  bool is_grouped;
-  char *group_name;
-  char *group_id;
 };
 
 struct airplay_master_session
@@ -425,6 +423,8 @@ static const char *airplay_devtype[] =
   "AppleTV",
   "AppleTV4",
   "HomePod",
+  "HomePod Mini",
+  "Apple Computer"
   "Other",
 };
 
@@ -3775,20 +3775,29 @@ airplay_device_cb(const char *name, const char *type, const char *domain, const 
   keyval_clear(&features_kv);
 
   // Grouping 
-  re->is_grouped = false;
   const char *groupid = keyval_get(txt, "gid");
   if (groupid)
     {
-      DPRINTF(E_INFO, L_AIRPLAY, "Device '%s' is member of group\n", name);
+      // groupid may contain multiple entries separated by + character. Only the
+      // first entry is relevant
+      size_t length = 0;
+      for (length = 0; groupid[length] != 0 && groupid[length] != '+'; length++);
 
       const char *groupname = keyval_get(txt, "gpn");
-
       if (groupname) 
-        {
-          re->is_grouped = true;
-          re->group_id = strdup(groupid);
-          re->group_name = strdup(groupname);
-        }
+      {
+        rd->device_group_name = strdup(groupname);
+        rd->device_group_id = strndup(groupid, length);
+      }
+
+      const char *parentGroupId = keyval_get(txt, "pgid");
+      if (parentGroupId) 
+        rd->playback_group_id = strdup(parentGroupId);
+      else 
+        rd->playback_group_id = strndup(groupid, length);
+
+
+      DPRINTF(E_INFO, L_AIRPLAY, "Device '%s' (%p)is member of device group '%s'\n", name, rd, rd->device_group_id);
     }
  
   // Only default audio quality supported so far
@@ -3813,8 +3822,14 @@ airplay_device_cb(const char *name, const char *type, const char *domain, const 
     re->devtype = AIRPLAY_DEV_APPLETV4; // Stream to ATV with tvOS 10 needs to be kept alive
   else if (strncmp(p, "AppleTV", strlen("AppleTV")) == 0)
     re->devtype = AIRPLAY_DEV_APPLETV;
-  else if (strncmp(p, "AudioAccessory", strlen("AudioAccessory")) == 0)
+  else if (strncmp(p, "AudioAccessory1,1", strlen("AudioAccessory1,1")) == 0)
     re->devtype = AIRPLAY_DEV_HOMEPOD;
+  else if (strncmp(p, "AudioAccessory5,1", strlen("AudioAccessory5,1")) == 0)
+    re->devtype = AIRPLAY_DEV_HOMEPOD_MINI;
+  else if (strncmp(p, "iMac", strlen("iMac")) == 0)
+    re->devtype = AIRPLAY_DEV_MAC;
+  else if (strncmp(p, "MacBook", strlen("MacBook")) == 0)
+    re->devtype = AIRPLAY_DEV_MAC;
   else if (*p == '\0')
     DPRINTF(E_WARN, L_AIRPLAY, "AirPlay device '%s': am has no value\n", name);
 
