@@ -104,6 +104,8 @@ enum raop_devtype {
   RAOP_DEV_APPLETV,
   RAOP_DEV_APPLETV4,
   RAOP_DEV_HOMEPOD,
+  RAOP_DEV_HOMEPOD_MINI,
+  RAOP_DEV_MAC,
   RAOP_DEV_OTHER,
 };
 
@@ -287,6 +289,8 @@ static const char *raop_devtype[] =
   "AppleTV",
   "AppleTV4",
   "HomePod",
+  "HomePod Mini",
+  "Apple Computer"
   "Other",
 };
 
@@ -4239,8 +4243,14 @@ raop_device_cb(const char *name, const char *type, const char *domain, const cha
     re->devtype = RAOP_DEV_APPLETV4; // Stream to ATV with tvOS 10 needs to be kept alive
   else if (strncmp(p, "AppleTV", strlen("AppleTV")) == 0)
     re->devtype = RAOP_DEV_APPLETV;
-  else if (strncmp(p, "AudioAccessory", strlen("AudioAccessory")) == 0)
+  else if (strncmp(p, "AudioAccessory1,1", strlen("AudioAccessory1,1")) == 0)
     re->devtype = RAOP_DEV_HOMEPOD;
+  else if (strncmp(p, "AudioAccessory5,1", strlen("AudioAccessory5,1")) == 0)
+    re->devtype = RAOP_DEV_HOMEPOD_MINI;
+  else if (strncmp(p, "iMac", strlen("iMac")) == 0)
+    re->devtype = RAOP_DEV_MAC;
+  else if (strncmp(p, "MacBook", strlen("MacBook")) == 0)
+    re->devtype = RAOP_DEV_MAC;
   else if (*p == '\0')
     DPRINTF(E_LOG, L_RAOP, "AirPlay device '%s': am has no value\n", device_name);
 
