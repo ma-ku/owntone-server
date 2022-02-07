@@ -146,6 +146,15 @@ struct output_device
   void *extra_device_info;
   void *session;
 
+  // Reflects a group (group name will be NULL for now)
+  char *playback_group_name;
+  char *playback_group_id;
+
+  // If devices are combined (stereo, surround)
+  uint64_t device_group_int_id;
+  char *device_group_name;
+  char *device_group_id;
+
   struct output_device *next;
 };
 
@@ -262,6 +271,9 @@ struct output_definition
 };
 
 /* ------------------------------- General use ------------------------------ */
+
+struct output_device *
+outputs_device_get_next(uint64_t device_id, struct output_device *last_device);
 
 struct output_device *
 outputs_device_get(uint64_t device_id);

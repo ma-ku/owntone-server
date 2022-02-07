@@ -43,6 +43,13 @@ struct player_speaker_info {
   bool prevent_playback;
   bool busy;
 
+
+  char playback_group_name[255];
+  char playback_group_id[255];
+
+  char device_group_name[255];
+  char device_group_id[255];
+
   bool has_video;
 };
 

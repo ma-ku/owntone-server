@@ -3723,19 +3723,19 @@ airplay_device_cb(const char *name, const char *type, const char *domain, const 
     {
       // Device stopped advertising
       switch (family)
-	{
-	  case AF_INET:
-	    rd->v4_port = 1;
-	    break;
+        {
+          case AF_INET:
+            rd->v4_port = 1;
+            break;
 
-	  case AF_INET6:
-	    rd->v6_port = 1;
-	    break;
-	}
+          case AF_INET6:
+            rd->v6_port = 1;
+            break;
+        }
 
       ret = player_device_remove(rd);
       if (ret < 0)
-	goto free_rd;
+	      goto free_rd;
 
       return;
     }
@@ -3785,10 +3785,41 @@ airplay_device_cb(const char *name, const char *type, const char *domain, const 
 
       const char *groupname = keyval_get(txt, "gpn");
       if (groupname) 
-      {
-        rd->device_group_name = strdup(groupname);
-        rd->device_group_id = strndup(groupid, length);
-      }
+        {
+          uint8_t *hash_bytes;
+          gcry_md_hd_t hd;
+          gpg_error_t gc_err;
+          char ebuf[64];
+          
+          gc_err = gcry_md_open(&hd, GCRY_MD_MD5, 0);
+          if (gc_err != GPG_ERR_NO_ERROR)
+            {
+              gpg_strerror_r(gc_err, ebuf, sizeof(ebuf));
+              DPRINTF(E_LOG, L_AIRPLAY, "Could not open MD5: %s\n", ebuf);
+              goto free_rd;
+            }
+
+          gcry_md_write(hd, groupid, length);
+
+          hash_bytes = gcry_md_read(hd, GCRY_MD_MD5);
+          if (!hash_bytes)
+            {
+              DPRINTF(E_LOG, L_AIRPLAY, "Could not read MD5 hash\n");
+              goto free_rd;
+            }
+
+          uint64_t intHash = 0;
+          for (int i = 0; i < 8; i++) {
+            intHash = (intHash << 8) | hash_bytes[i];
+          }
+
+          gcry_md_close(hd);
+
+          rd->device_group_int_id = intHash; // *((u_int64_t*)hash_bytes);
+
+          rd->device_group_name = strdup(groupname);
+          rd->device_group_id = strndup(groupid, length);
+        }
 
       const char *parentGroupId = keyval_get(txt, "pgid");
       if (parentGroupId) 

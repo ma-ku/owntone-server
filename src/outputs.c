@@ -549,6 +549,33 @@ vol_adjust(void)
 
 /* ----------------------------------- API ---------------------------------- */
 
+// Retrieve the next output_device with either the same id or the same device_group_int_id. 
+
+struct output_device *
+outputs_device_get_next(uint64_t device_id, struct output_device *last_device)
+{
+  struct output_device *device = outputs_device_list;
+
+      DPRINTF(E_WARN, L_PLAYER, "Searching device with id %" PRIu64 " starting at %p\n", device_id, last_device);
+
+  if (last_device)
+    device = last_device->next;
+
+  for (; device; device = device->next)
+    {
+      DPRINTF(E_WARN, L_PLAYER, "Checking device with id %" PRIu64 "\n", device_id);
+      if (device_id == device->id) 
+  	    return device;
+
+      if (device_id == device->device_group_int_id)
+        return device;
+    }
+
+  DPRINTF(E_WARN, L_PLAYER, "Output device with id %" PRIu64 " has disappeared from our list\n", device_id);
+  return NULL;
+}
+
+// Retrieve an output_device by looking it up by its id only.
 struct output_device *
 outputs_device_get(uint64_t device_id)
 {
@@ -556,8 +583,8 @@ outputs_device_get(uint64_t device_id)
 
   for (device = outputs_device_list; device; device = device->next)
     {
-      if (device_id == device->id)
-	return device;
+      if (device_id == device->id) 
+  	    return device;
     }
 
   DPRINTF(E_WARN, L_PLAYER, "Output device with id %" PRIu64 " has disappeared from our list\n", device_id);
@@ -706,7 +733,8 @@ outputs_device_add(struct output_device *add, bool new_deselect)
   // This is relevant for Airplay 1 and 2 where the same device can support both
   if (device && device->type != add->type)
     {
-      if (outputs_priority(device) < outputs_priority(add))
+      // Only remove if the new device os not in a a group.
+      if ((outputs_priority(device) < outputs_priority(add)) && (add->device_group_id == NULL) && (add->playback_group_id == NULL))
 	{
 	  DPRINTF(E_DBG, L_PLAYER, "Ignoring type %s for device '%s', will use type %s\n", add->type_name, add->name, device->type_name);
 	  outputs_device_free(add);
@@ -757,15 +785,15 @@ outputs_device_add(struct output_device *add, bool new_deselect)
 	}
 
       if (add->v6_address)
-	{
-	  free(device->v6_address);
+        {
+          free(device->v6_address);
 
-	  device->v6_address = add->v6_address;
-	  device->v6_port = add->v6_port;
+          device->v6_address = add->v6_address;
+          device->v6_port = add->v6_port;
 
-	  // Address is ours now
-	  add->v6_address = NULL;
-	}
+          // Address is ours now
+          add->v6_address = NULL;
+        }
 
       free(device->name);
       device->name = add->name;
@@ -773,6 +801,24 @@ outputs_device_add(struct output_device *add, bool new_deselect)
 
       device->has_password = add->has_password;
       device->password = add->password;
+
+      device->device_group_int_id = add->device_group_int_id;
+      
+      free(device->device_group_id);
+      device->device_group_id = add->device_group_id;
+      add->device_group_id = NULL;
+
+      free(device->device_group_name);
+      device->device_group_name = add->device_group_name;
+      add->device_group_name = NULL;
+
+      free(device->playback_group_id);
+      device->playback_group_id = add->playback_group_id;
+      add->playback_group_id = NULL;
+
+      free(device->playback_group_name);
+      device->playback_group_name = add->playback_group_name;
+      add->playback_group_name = NULL;
 
       outputs_device_free(add);
     }
@@ -1023,6 +1069,12 @@ outputs_device_free(struct output_device *device)
   free(device->auth_key);
   free(device->v4_address);
   free(device->v6_address);
+
+  free(device->playback_group_id);
+  free(device->playback_group_name);
+
+  free(device->device_group_id);
+  free(device->device_group_name);
 
   free(device);
 }

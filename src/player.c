@@ -2508,9 +2508,20 @@ static void
 device_to_speaker_info(struct player_speaker_info *spk, struct output_device *device)
 {
   memset(spk, 0, sizeof(struct player_speaker_info));
-  spk->id = device->id;
-  spk->active_remote = (uint32_t)device->id;
-  strncpy(spk->name, device->name, sizeof(spk->name));
+
+  if (device->device_group_id) 
+    {
+      spk->id = device->device_group_int_id;
+      strncpy(spk->name, device->device_group_name, sizeof(spk->name));
+    }
+  else 
+    {
+      spk->id = device->id;
+      strncpy(spk->name, device->name, sizeof(spk->name));
+    }
+
+  spk->active_remote = (uint32_t)spk->id;
+
   spk->name[sizeof(spk->name) - 1] = '\0';
   strncpy(spk->output_type, device->type_name, sizeof(spk->output_type));
   spk->output_type[sizeof(spk->output_type) - 1] = '\0';
@@ -2525,7 +2536,25 @@ device_to_speaker_info(struct player_speaker_info *spk, struct output_device *de
   spk->needs_auth_key = (device->requires_auth && device->auth_key == NULL);
   spk->prevent_playback = device->prevent_playback;
   spk->busy = device->busy;
+
+  if (device->playback_group_id)
+    strncpy(spk->playback_group_id, device->playback_group_id, 255);
+
+  if (device->playback_group_name)
+    strncpy(spk->playback_group_name, device->playback_group_name, 255);
+
+  if (device->device_group_id)
+    strncpy(spk->device_group_id, device->device_group_id, 255);
+
+  if (device->device_group_name)
+    strncpy(spk->device_group_name, device->device_group_name, 255);
 }
+
+struct group_speaker 
+{
+  u_int64_t id;
+  struct group_speaker* next;
+};
 
 static enum command_state
 speaker_enumerate(void *arg, int *retval)
@@ -2534,10 +2563,43 @@ speaker_enumerate(void *arg, int *retval)
   struct output_device *device;
   struct player_speaker_info spk;
 
+  struct group_speaker *groups = NULL;
+
+  // Process all devices and create only one entry per device_group_id (e.g. stereo pairs)
   for (device = outputs_list(); device; device = device->next)
     {
-      device_to_speaker_info(&spk, device);
-      spk_enum->cb(&spk, spk_enum->arg);
+      bool found = false;
+
+      if (device->device_group_id) 
+        {
+          // Already processed?
+          for (struct group_speaker *searcher = groups; (searcher != NULL) && !found; searcher = searcher->next)
+            found = (searcher->id == device->device_group_int_id); 
+
+          if (!found) 
+            {
+              struct group_speaker* add = calloc(1, sizeof(struct group_speaker));
+              add->id = device->device_group_int_id;
+              add->next = groups;
+              groups = add;
+            }
+        }
+
+      // No, create an entry
+      if (!found) 
+        {
+          device_to_speaker_info(&spk, device);            
+          spk_enum->cb(&spk, spk_enum->arg);
+        }
+      
+    }
+
+  while (groups != NULL) 
+    {
+      struct group_speaker *next = groups->next;
+
+      free(groups);
+      groups = next;
     }
 
   *retval = 0;
@@ -2553,12 +2615,13 @@ speaker_get_byid(void *arg, int *retval)
   for (device = outputs_list(); device; device = device->next)
     {
       if ((device->advertised || device->selected)
-	  && device->id == spk_param->spk_id)
-	{
-	  device_to_speaker_info(spk_param->spk_info, device);
-	  *retval = 0;
-	  return COMMAND_END;
-	}
+          && ((device->id == spk_param->spk_id)
+            || (device->device_group_int_id == spk_param->spk_id)))
+        {
+          device_to_speaker_info(spk_param->spk_info, device);
+          *retval = 0;
+          return COMMAND_END;
+        }
     }
 
   // No output device found with matching id
@@ -2575,11 +2638,11 @@ speaker_get_byactiveremote(void *arg, int *retval)
   for (device = outputs_list(); device; device = device->next)
     {
       if ((uint32_t)device->id == spk_param->active_remote)
-	{
-	  device_to_speaker_info(spk_param->spk_info, device);
-	  *retval = 0;
-	  return COMMAND_END;
-	}
+        {
+          device_to_speaker_info(spk_param->spk_info, device);
+          *retval = 0;
+          return COMMAND_END;
+        }
     }
 
   // No output device found with matching id
@@ -2639,51 +2702,55 @@ static enum command_state
 speaker_enable(void *arg, int *retval)
 {
   uint64_t *id = arg;
-  struct output_device *device;
+  struct output_device *device = NULL;
   int max_volume;
 
   *retval = -1;
 
-  device = outputs_device_get(*id);
-  if (!device)
-    return COMMAND_END;
+  static enum command_state state = COMMAND_END;
 
-  DPRINTF(E_DBG, L_PLAYER, "Speaker enable: '%s' (id=%" PRIu64 ")\n", device->name, *id);
+  while ((device = outputs_device_get_next(*id, device)) != NULL)
+    {
+        
+      DPRINTF(E_DBG, L_PLAYER, "Speaker enable: '%s' (id=%" PRIu64 ")\n", device->name, *id);
 
-  max_volume = (player_state != PLAY_STOPPED) ? outputs_volume_get() : -1;
+      max_volume = (player_state != PLAY_STOPPED) ? outputs_volume_get() : -1;
 
-  outputs_device_select(device, max_volume);
+      outputs_device_select(device, max_volume);
 
-  *retval = outputs_device_start(device, device_activate_cb, PLAYER_ONLY_PROBE);
+      *retval = outputs_device_start(device, device_activate_cb, PLAYER_ONLY_PROBE);
 
-  if (*retval > 0)
-    return COMMAND_PENDING; // async
+      if (*retval > 0)
+        state = COMMAND_PENDING; // async
+    }
 
-  return COMMAND_END;
+
+  return state;
 }
 
 static enum command_state
 speaker_disable(void *arg, int *retval)
 {
   uint64_t *id = arg;
-  struct output_device *device;
+  struct output_device *device = NULL;
 
   *retval = -1;
 
-  device = outputs_device_get(*id);
-  if (!device)
-    return COMMAND_END;
+  static enum command_state state = COMMAND_END;
 
-  DPRINTF(E_DBG, L_PLAYER, "Speaker disable: '%s' (id=%" PRIu64 ")\n", device->name, *id);
+  while ((device = outputs_device_get_next(*id, device)) != NULL)
+    {
+      DPRINTF(E_DBG, L_PLAYER, "Speaker disable: '%s' (id=%" PRIu64 ")\n", device->name, *id);
 
-  outputs_device_deselect(device);
+      outputs_device_deselect(device);
 
-  *retval = outputs_device_stop(device, device_shutdown_cb);
+      *retval = outputs_device_stop(device, device_shutdown_cb);
 
-  if (*retval > 0)
-    return COMMAND_PENDING; // async
+      if (*retval > 0)
+        state = COMMAND_PENDING; // async
+    }
 
-  return COMMAND_END;
+  return state;
 }
 
 static enum command_state
