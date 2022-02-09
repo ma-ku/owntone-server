@@ -735,11 +735,11 @@ outputs_device_add(struct output_device *add, bool new_deselect)
     {
       // Only remove if the new device os not in a a group.
       if ((outputs_priority(device) < outputs_priority(add)) && (add->device_group_id == NULL) && (add->playback_group_id == NULL))
-	{
-	  DPRINTF(E_DBG, L_PLAYER, "Ignoring type %s for device '%s', will use type %s\n", add->type_name, add->name, device->type_name);
-	  outputs_device_free(add);
-	  return NULL;
-	}
+        {
+          DPRINTF(E_DBG, L_PLAYER, "Ignoring type %s for device '%s', will use type %s\n", add->type_name, add->name, device->type_name);
+          outputs_device_free(add);
+          return NULL;
+        }
 
       // Remove existing device, higher priority device will be added below
       outputs_device_remove(device);
@@ -803,7 +803,8 @@ outputs_device_add(struct output_device *add, bool new_deselect)
       device->password = add->password;
 
       device->device_group_int_id = add->device_group_int_id;
-      
+      device->playback_group_int_id = add->playback_group_int_id;
+
       free(device->device_group_id);
       device->device_group_id = add->device_group_id;
       add->device_group_id = NULL;

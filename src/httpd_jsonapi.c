@@ -1621,12 +1621,17 @@ speaker_to_json(struct player_speaker_info *spk)
   snprintf(output_id, sizeof(output_id), "%" PRIu64, spk->id);
   json_object_object_add(output, "id", json_object_new_string(output_id));
   json_object_object_add(output, "name", json_object_new_string(spk->name));
+  json_object_object_add(output, "is_group", json_object_new_boolean(spk->is_group));
   json_object_object_add(output, "type", json_object_new_string(spk->output_type));
   json_object_object_add(output, "selected", json_object_new_boolean(spk->selected));
   json_object_object_add(output, "has_password", json_object_new_boolean(spk->has_password));
   json_object_object_add(output, "requires_auth", json_object_new_boolean(spk->requires_auth));
   json_object_object_add(output, "needs_auth_key", json_object_new_boolean(spk->needs_auth_key));
   json_object_object_add(output, "volume", json_object_new_int(spk->absvol));
+
+
+  // json_object_object_add(output, "dev_group_id", json_object_new_string(spk->device_group_id));
+  // json_object_object_add(output, "playback_group_id", json_object_new_string(spk->playback_group_id));
 
   return output;
 }
@@ -1636,11 +1641,27 @@ speaker_enum_cb(struct player_speaker_info *spk, void *arg)
 {
   json_object *outputs;
   json_object *output;
+  char output_id[21];
 
   outputs = arg;
 
-  output = speaker_to_json(spk);
-  json_object_array_add(outputs, output);
+  if (spk->is_group) 
+    {
+      output = json_object_new_object();
+
+      snprintf(output_id, sizeof(output_id), "%" PRIu64, spk->id);
+      json_object_object_add(output, "id", json_object_new_string(output_id));
+      json_object_object_add(output, "name", json_object_new_string(spk->name));    
+      json_object_object_add(output, "is_group", json_object_new_boolean(true));
+      json_object_object_add(output, "type", json_object_new_string(spk->output_type));
+      json_object_object_add(output, "selected", json_object_new_boolean(spk->selected));
+
+      json_object_object_add(output, "group_id", json_object_new_string(spk->playback_group_id));    
+    }
+  else 
+    output = speaker_to_json(spk);
+
+    json_object_array_add(outputs, output);
 }
 
 /*
@@ -1789,7 +1810,34 @@ jsonapi_reply_outputs(struct httpd_request *hreq)
 
   outputs = json_object_new_array();
 
+#if SPEAKER_GROUPING
+  player_speaker_enumerate_ex(speaker_enum_cb, true, NULL, outputs);
+
+  for( int i = 0; i < json_object_array_length(outputs); i++) 
+    {
+      json_object *node = json_object_array_get_idx(outputs, i);
+      json_object *attribute;
+
+      if (json_object_object_get_ex(node, "is_group", &attribute) && json_object_get_type(attribute) == json_type_boolean)
+        if (!json_object_get_boolean(attribute)) 
+          continue;
+
+      if (json_object_object_get_ex(node, "group_id", &attribute) && json_object_get_type(attribute) == json_type_string)
+        {
+          const char* playback_group_id = json_object_get_string(attribute);
+
+          if (playback_group_id) 
+          {
+            json_object *array = json_object_new_array();
+            player_speaker_enumerate_ex(speaker_enum_cb, false, playback_group_id, array);
+
+            json_object_object_add(node, "members", array);   
+          }
+        }
+    }
+#else
   player_speaker_enumerate(speaker_enum_cb, outputs);
+#endif 
 
   jreply = json_object_new_object();
   json_object_object_add(jreply, "outputs", outputs);

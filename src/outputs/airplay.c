@@ -166,6 +166,7 @@ enum airplay_seq_type
   AIRPLAY_SEQ_PAIR_VERIFY,
   AIRPLAY_SEQ_PAIR_TRANSIENT,
   AIRPLAY_SEQ_FEEDBACK,
+//  AIRPLAY_SEQ_SETPEERS,
   AIRPLAY_SEQ_CONTINUE, // Must be last element
 };
 
@@ -1734,6 +1735,22 @@ airplay_metadata_send(struct output_metadata *metadata)
   airplay_cur_metadata = metadata;
 }
 
+static void
+airplay_set_peers()
+{
+  struct airplay_session *rs;
+  struct airplay_session *next;
+
+  for (rs = airplay_sessions; rs; rs = next)
+    {
+      next = rs->next;
+
+      if (!(rs->state & AIRPLAY_STATE_F_CONNECTED) || !rs->wanted_metadata)
+	      continue;
+
+      // sequence_start(AIRPLAY_SEQ_SETPEERS, rs, NULL, "airplay_set_peers");
+    }
+}
 
 /* ------------------------------ Volume handling --------------------------- */
 
@@ -2541,12 +2558,29 @@ payload_make_setpeers(struct evrtsp_request *req, struct airplay_session *rs, vo
 
   plist_t root;
 
+  struct airplay_session *session;
+  struct airplay_session *next;
+  
   // TODO also have ipv6
   root = plist_new_array();
   item = plist_new_string(rs->address);
   plist_array_append_item(root, item);
-  item = plist_new_string(rs->local_address);
-  plist_array_append_item(root, item);
+
+
+  
+  for (session = airplay_sessions; session; session = next)
+    {
+      next = session->next;
+
+      if (rs == session) 
+        continue;
+
+      if (!(session->state & AIRPLAY_STATE_F_CONNECTED) || !session->wanted_metadata)
+	      continue;
+
+      item = plist_new_string(session->local_address);
+      plist_array_append_item(root, item);
+    }
 
   ret = wplist_to_bin(&data, &len, root);
   plist_free(root);
@@ -3367,6 +3401,7 @@ static struct airplay_seq_definition airplay_seq_definition[] =
   { AIRPLAY_SEQ_PAIR_SETUP, session_pair_success, session_failure },
   { AIRPLAY_SEQ_PAIR_VERIFY, session_pair_success, session_failure },
   { AIRPLAY_SEQ_PAIR_TRANSIENT, session_pair_success, session_failure },
+//  { AIRPLAY_SEQ_SETPEERS, NULL, session_failure },
   { AIRPLAY_SEQ_FEEDBACK, NULL, session_failure },
 };
 
@@ -3430,6 +3465,9 @@ static struct airplay_seq_request airplay_seq_request[][7] =
     { AIRPLAY_SEQ_PAIR_TRANSIENT, "pair setup 1", EVRTSP_REQ_POST, payload_make_pair_setup1, response_handler_pair_setup1, "application/octet-stream", "/pair-setup", true },
     { AIRPLAY_SEQ_PAIR_TRANSIENT, "pair setup 2", EVRTSP_REQ_POST, payload_make_pair_setup2, response_handler_pair_setup2, "application/octet-stream", "/pair-setup", false },
   },
+  // {
+  //   { AIRPLAY_SEQ_SETPEERS, "SETPEERS", EVRTSP_REQ_SETPEERS, payload_make_setpeers, NULL, "/peer-list-changed", NULL, false },
+  // },
   {
     { AIRPLAY_SEQ_FEEDBACK, "POST /feedback", EVRTSP_REQ_POST, NULL, NULL, NULL, "/feedback", true },
   },
@@ -3636,6 +3674,45 @@ features_parse(struct keyval *features_kv, const char *features_txt, const char 
   return 0;
 }
 
+bool 
+hash_string(const char *string, size_t len, uint64_t* hash)
+{
+  uint8_t *hash_bytes;
+  gcry_md_hd_t hd;
+  gpg_error_t gc_err;
+  char ebuf[64];
+  
+  if (!hash)
+    return false;
+  
+  gc_err = gcry_md_open(&hd, GCRY_MD_MD5, 0);
+  if (gc_err != GPG_ERR_NO_ERROR)
+    {
+      gpg_strerror_r(gc_err, ebuf, sizeof(ebuf));
+      DPRINTF(E_LOG, L_AIRPLAY, "Could not open MD5: %s\n", ebuf);
+      return false;
+    }
+
+  gcry_md_write(hd, string, len);
+
+  hash_bytes = gcry_md_read(hd, GCRY_MD_MD5);
+  if (!hash_bytes)
+    {
+      DPRINTF(E_LOG, L_AIRPLAY, "Could not read MD5 hash\n");
+      return false;
+    }
+
+  uint64_t intHash = 0;
+  for (int i = 0; i < 8; i++) {
+    intHash = (intHash << 8) | hash_bytes[i];
+  }
+
+  *hash = intHash;
+
+  gcry_md_close(hd);  
+
+  return true;
+}
 
 /* Examples of txt content:
  * Airport Express 2:
@@ -3774,61 +3851,57 @@ airplay_device_cb(const char *name, const char *type, const char *domain, const 
 
   keyval_clear(&features_kv);
 
-  // Grouping 
   const char *groupid = keyval_get(txt, "gid");
   if (groupid)
     {
       // groupid may contain multiple entries separated by + character. Only the
       // first entry is relevant
-      size_t length = 0;
-      for (length = 0; groupid[length] != 0 && groupid[length] != '+'; length++);
+      size_t gidLength = 0;
+      for (gidLength = 0; groupid[gidLength] != 0 && groupid[gidLength] != '+'; gidLength++);
+
+      uint64_t dgHash = 0;
+
+      if (!hash_string(groupid, gidLength, &dgHash))
+        {
+          DPRINTF(E_LOG, L_AIRPLAY, "Could not compute hash for device group id\n");
+          goto free_rd;
+        }
 
       const char *groupname = keyval_get(txt, "gpn");
       if (groupname) 
         {
-          uint8_t *hash_bytes;
-          gcry_md_hd_t hd;
-          gpg_error_t gc_err;
-          char ebuf[64];
-          
-          gc_err = gcry_md_open(&hd, GCRY_MD_MD5, 0);
-          if (gc_err != GPG_ERR_NO_ERROR)
-            {
-              gpg_strerror_r(gc_err, ebuf, sizeof(ebuf));
-              DPRINTF(E_LOG, L_AIRPLAY, "Could not open MD5: %s\n", ebuf);
-              goto free_rd;
-            }
-
-          gcry_md_write(hd, groupid, length);
-
-          hash_bytes = gcry_md_read(hd, GCRY_MD_MD5);
-          if (!hash_bytes)
-            {
-              DPRINTF(E_LOG, L_AIRPLAY, "Could not read MD5 hash\n");
-              goto free_rd;
-            }
-
-          uint64_t intHash = 0;
-          for (int i = 0; i < 8; i++) {
-            intHash = (intHash << 8) | hash_bytes[i];
-          }
-
-          gcry_md_close(hd);
-
-          rd->device_group_int_id = intHash; // *((u_int64_t*)hash_bytes);
-
+          rd->device_group_int_id = dgHash; 
           rd->device_group_name = strdup(groupname);
-          rd->device_group_id = strndup(groupid, length);
+          rd->playback_group_name = strdup(groupname);
+          rd->device_group_id = strndup(groupid, gidLength);
         }
 
       const char *parentGroupId = keyval_get(txt, "pgid");
       if (parentGroupId) 
-        rd->playback_group_id = strdup(parentGroupId);
+        {
+          size_t pgidLength = 0;
+          for (pgidLength = 0; parentGroupId[pgidLength] != 0 && parentGroupId[pgidLength] != '+'; pgidLength++);
+
+          uint64_t pgHash = 0;
+
+          if (!hash_string(parentGroupId, pgidLength, &pgHash))
+            {
+              DPRINTF(E_LOG, L_AIRPLAY, "Could not compute hash for playback group id\n");
+              goto free_rd;
+            }
+
+          rd->playback_group_id = strndup(parentGroupId, pgidLength);
+          rd->playback_group_name = strdup((groupname ? groupname : rd->name));
+          rd->playback_group_int_id = pgHash;
+        }
       else 
-        rd->playback_group_id = strndup(groupid, length);
+        {
+          rd->playback_group_id = strndup(groupid, gidLength);
+          rd->playback_group_int_id = dgHash;
+        }
 
 
-      DPRINTF(E_INFO, L_AIRPLAY, "Device '%s' (%p)is member of device group '%s'\n", name, rd, rd->device_group_id);
+      DPRINTF(E_INFO, L_AIRPLAY, "Device '%s' is member of device group '%s'\n", name, rd->device_group_id);
     }
  
   // Only default audio quality supported so far

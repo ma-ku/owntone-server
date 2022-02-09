@@ -133,6 +133,8 @@
 struct spk_enum
 {
   spk_enum_cb cb;
+  bool add_groups;
+  const char* playback_group_id;
   void *arg;
 };
 
@@ -2505,16 +2507,23 @@ playback_seek(void *arg, int *retval)
 }
 
 static void
-device_to_speaker_info(struct player_speaker_info *spk, struct output_device *device)
+device_to_speaker_info(struct player_speaker_info *spk, struct output_device *device, bool is_group)
 {
   memset(spk, 0, sizeof(struct player_speaker_info));
 
-  if (device->device_group_id) 
+  spk->is_group = is_group;
+
+  if (is_group) 
+    {
+      spk->id = device->playback_group_int_id;
+      spk->name[0] = 0;
+    }
+  else if (device->device_group_id) 
     {
       spk->id = device->device_group_int_id;
       strncpy(spk->name, device->device_group_name, sizeof(spk->name));
     }
-  else 
+  else
     {
       spk->id = device->id;
       strncpy(spk->name, device->name, sizeof(spk->name));
@@ -2538,69 +2547,228 @@ device_to_speaker_info(struct player_speaker_info *spk, struct output_device *de
   spk->busy = device->busy;
 
   if (device->playback_group_id)
-    strncpy(spk->playback_group_id, device->playback_group_id, 255);
+    strncpy(spk->playback_group_id, device->playback_group_id, 254);
 
   if (device->playback_group_name)
-    strncpy(spk->playback_group_name, device->playback_group_name, 255);
+    strncpy(spk->playback_group_name, device->playback_group_name, 254);
 
   if (device->device_group_id)
-    strncpy(spk->device_group_id, device->device_group_id, 255);
+    strncpy(spk->device_group_id, device->device_group_id, 254);
 
   if (device->device_group_name)
-    strncpy(spk->device_group_name, device->device_group_name, 255);
+    strncpy(spk->device_group_name, device->device_group_name, 254);
 }
 
 struct group_speaker 
 {
-  u_int64_t id;
-  struct group_speaker* next;
+  uint64_t id;
+  int count;
+  char name[255];
+  struct group_speaker *next;
 };
+
+
+static void
+list_delete(struct group_speaker** list)
+{
+  if (list)
+    while (*list) 
+      {
+        struct group_speaker *next = (*list)->next;
+
+        free(*list);
+        *list = next;
+      }
+}
+
+static struct group_speaker* 
+list_add_group(struct group_speaker** list, uint64_t id)
+{
+  if (list)
+    {
+      struct group_speaker* add = calloc(1, sizeof(struct group_speaker));
+      add->id = id;
+      add->next = *list;
+      *list = add;
+
+      return add;
+    }
+
+  return NULL;
+}
+
+static bool 
+list_contains_group(struct group_speaker* list, uint64_t id, struct group_speaker** entry)
+{
+  while (list) 
+    {
+      if (list->id == id) 
+        {
+          if (entry) 
+            *entry = list;
+          
+          return true;
+        }
+
+      list = list->next;
+    }
+
+    return false;
+}
+
+static const char* 
+device_display_name(const struct output_device *device) 
+{
+  if (device->playback_group_name)
+    return device->playback_group_name;
+
+  if (device->device_group_name) 
+    return device->device_group_name;
+
+  return device->name;
+}
 
 static enum command_state
 speaker_enumerate(void *arg, int *retval)
 {
+
   struct spk_enum *spk_enum = arg;
   struct output_device *device;
   struct player_speaker_info spk;
 
-  struct group_speaker *groups = NULL;
+  struct group_speaker *device_groups = NULL;
+  struct group_speaker *playback_groups = NULL;
+
+  if (spk_enum->add_groups)
+    {
+      // Walk through the devices and find any groups and check, which groups are true groups
+      // in the sense that they contain more than one entry.
+      for (device = outputs_list(); device; device = device->next)
+      {
+        if (device->playback_group_id) 
+          {
+            bool found = false;
+
+            for (struct group_speaker *searcher = playback_groups; (searcher != NULL) && !found; searcher = searcher->next) 
+              {
+                found = (searcher->id == device->playback_group_int_id); 
+
+                if (found) 
+                  {
+                    // This must be an additional speaker. But it can also be the second speaker of
+                    // a device group (stereo, ...). In that case, do not add it twice.
+                    bool devFound = false;
+
+                    if (device->device_group_name) 
+                      {
+                        devFound = list_contains_group(device_groups, device->device_group_int_id, NULL);
+
+                        if (!devFound) 
+                          list_add_group(&device_groups, device->device_group_int_id);
+                      }
+
+                    if (!devFound) 
+                      {
+                        searcher->count++;
+
+                        if (device_display_name(device)) 
+                          {
+                            strncat(searcher->name, " + ", 254);
+                            strncat(searcher->name, device_display_name(device), 254);
+                          }
+                      }
+                  }
+              }
+
+            if (!found) 
+              {
+                // First occurrence, store it in the list of groups
+                struct group_speaker* add = list_add_group(&playback_groups, device->playback_group_int_id);
+
+                add->count = 1;
+                add->name[0] = 0;
+                strncat(add->name, device_display_name(device), 254);
+
+                list_add_group(&device_groups, device->device_group_int_id);                  
+              }
+          }
+      }
+
+      // Go through the playback groups and generate a special speaker with flag is_group = true that
+      // contains the speakers. Will only apply to speakers that have at least two members. To create the
+      // group one speaker in the group is taken to provide the basic data.
+      for (struct group_speaker *searcher = playback_groups; (searcher != NULL); searcher = searcher->next) 
+        if (searcher->count > 1) 
+          {
+            for (device = outputs_list(); device; device = device->next)
+              {
+                if (device->playback_group_int_id == searcher->id) 
+                  {
+                    device_to_speaker_info(&spk, device, true); 
+                    spk.name[0] = 0;     
+                    strncpy(spk.name, searcher->name, 255);
+
+                    spk_enum->cb(&spk, spk_enum->arg);
+
+                    break;
+                  } 
+              }
+          }
+        
+    }
+
+  list_delete(&device_groups); 
 
   // Process all devices and create only one entry per device_group_id (e.g. stereo pairs)
   for (device = outputs_list(); device; device = device->next)
     {
+      bool process = true;
+      
+      if (spk_enum->playback_group_id) 
+        {
+          // We're in a group already so only render entries in that group
+          process = (device->playback_group_id && strcmp(device->playback_group_id, spk_enum->playback_group_id) == 0);
+        }
+      else 
+        {
+          // We're on the top level so an entry is either an ungrouped speaker
+          // or it is member of a group that has not yet been processed
+          bool found = false;
+
+          if (device->playback_group_id) 
+          {
+            for (struct group_speaker *searcher = playback_groups; (searcher != NULL) && !found; searcher = searcher->next) 
+              found = (searcher->count > 1) && (searcher->id == device->playback_group_int_id); 
+          }
+
+          process = !found;
+        }
+
+      if (!process) 
+        continue;
+
+      // Now render the remaining simple speakers
       bool found = false;
 
       if (device->device_group_id) 
         {
           // Already processed?
-          for (struct group_speaker *searcher = groups; (searcher != NULL) && !found; searcher = searcher->next)
-            found = (searcher->id == device->device_group_int_id); 
+          found = list_contains_group(device_groups, device->device_group_int_id, NULL);
 
           if (!found) 
-            {
-              struct group_speaker* add = calloc(1, sizeof(struct group_speaker));
-              add->id = device->device_group_int_id;
-              add->next = groups;
-              groups = add;
-            }
+            list_add_group(&device_groups, device->device_group_int_id);
         }
 
       // No, create an entry
       if (!found) 
         {
-          device_to_speaker_info(&spk, device);            
+          device_to_speaker_info(&spk, device, false);            
           spk_enum->cb(&spk, spk_enum->arg);
         }
-      
     }
 
-  while (groups != NULL) 
-    {
-      struct group_speaker *next = groups->next;
-
-      free(groups);
-      groups = next;
-    }
+  list_delete(&device_groups); 
+  list_delete(&playback_groups); 
 
   *retval = 0;
   return COMMAND_END;
@@ -2614,14 +2782,20 @@ speaker_get_byid(void *arg, int *retval)
 
   for (device = outputs_list(); device; device = device->next)
     {
-      if ((device->advertised || device->selected)
-          && ((device->id == spk_param->spk_id)
-            || (device->device_group_int_id == spk_param->spk_id)))
-        {
-          device_to_speaker_info(spk_param->spk_info, device);
-          *retval = 0;
-          return COMMAND_END;
-        }
+      if (device->advertised || device->selected)
+        if (  (device->id == spk_param->spk_id)
+           || (device->device_group_int_id == spk_param->spk_id))
+          {
+            device_to_speaker_info(spk_param->spk_info, device, false);
+            *retval = 0;
+            return COMMAND_END;
+          }
+        else if (device->playback_group_int_id == spk_param->spk_id)
+          {
+            device_to_speaker_info(spk_param->spk_info, device, true);
+            *retval = 0;
+            return COMMAND_END;
+          }
     }
 
   // No output device found with matching id
@@ -2639,7 +2813,7 @@ speaker_get_byactiveremote(void *arg, int *retval)
     {
       if ((uint32_t)device->id == spk_param->active_remote)
         {
-          device_to_speaker_info(spk_param->spk_info, device);
+          device_to_speaker_info(spk_param->spk_info, device, false);
           *retval = 0;
           return COMMAND_END;
         }
@@ -3341,9 +3515,17 @@ player_playback_prev(void)
 void
 player_speaker_enumerate(spk_enum_cb cb, void *arg)
 {
+  player_speaker_enumerate_ex(cb, false, NULL, arg);
+}
+
+void
+player_speaker_enumerate_ex(spk_enum_cb cb, bool add_groups, const char* playback_group_id, void *arg)
+{
   struct spk_enum spk_enum;
 
   spk_enum.cb = cb;
+  spk_enum.add_groups = add_groups;
+  spk_enum.playback_group_id = playback_group_id;
   spk_enum.arg = arg;
 
   commands_exec_sync(cmdbase, speaker_enumerate, NULL, &spk_enum);

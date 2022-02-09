@@ -147,6 +147,7 @@ struct output_device
   void *session;
 
   // Reflects a group (group name will be NULL for now)
+  uint64_t playback_group_int_id;
   char *playback_group_name;
   char *playback_group_id;
 

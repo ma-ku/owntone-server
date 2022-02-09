@@ -43,7 +43,8 @@ struct player_speaker_info {
   bool prevent_playback;
   bool busy;
 
-
+  bool is_group;
+  
   char playback_group_name[255];
   char playback_group_id[255];
 
@@ -96,6 +97,9 @@ player_playing_now(uint32_t *id);
 
 void
 player_speaker_enumerate(spk_enum_cb cb, void *arg);
+
+void
+player_speaker_enumerate_ex(spk_enum_cb cb, bool add_groups, const char* playback_group_id, void *arg);
 
 int
 player_speaker_set(uint64_t *ids);
