@@ -38,6 +38,7 @@
 #include <unistr.h>
 #include <sys/mman.h>
 #include <limits.h>
+#include <assert.h>
 
 #include <sqlite3.h>
 
@@ -1014,13 +1015,15 @@ sort_tag_create(char **sort_tag, const char *src_tag)
       return;
     }
 
-  // Set input pointer past article if present
+  // Set input pointer past article if present and disregard certain special chars
   if ((strncasecmp(src_tag, "a ", 2) == 0) && (len > 2))
     i_ptr = (uint8_t *)(src_tag + 2);
   else if ((strncasecmp(src_tag, "an ", 3) == 0) && (len > 3))
     i_ptr = (uint8_t *)(src_tag + 3);
   else if ((strncasecmp(src_tag, "the ", 4) == 0) && (len > 4))
     i_ptr = (uint8_t *)(src_tag + 4);
+  else if (strchr("[('\"", src_tag[0]) && (len > 1))
+    i_ptr = (uint8_t *)(src_tag + 1);
   else
     i_ptr = (uint8_t *)src_tag;
 
@@ -2214,11 +2217,12 @@ db_build_query_group_albums(struct query_params *qp, struct query_clause *qc)
   char *query;
 
   count = sqlite3_mprintf("SELECT COUNT(DISTINCT f.songalbumid) FROM files f %s;", qc->where);
-  query = sqlite3_mprintf("SELECT " \
-			  "  g.id, g.persistentid, f.album, f.album_sort, COUNT(f.id) as track_count, " \
-			  "  1 as album_count, f.album_artist, f.songartistid, " \
-			  "  SUM(f.song_length), MIN(f.data_kind), MIN(f.media_kind), MAX(f.year), MAX(f.date_released), " \
-			  "  MAX(f.time_added), MAX(f.time_played), MAX(f.seek) " \
+  query = sqlite3_mprintf("SELECT" \
+			  " g.id, g.persistentid, f.album, f.album_sort, COUNT(f.id) AS track_count," \
+			  " 1 AS album_count, f.album_artist, f.songartistid," \
+			  " SUM(f.song_length) AS song_length, MIN(f.data_kind) AS data_kind, MIN(f.media_kind) AS media_kind," \
+			  " MAX(f.year) AS year, MAX(f.date_released) AS date_released," \
+			  " MAX(f.time_added) AS time_added, MAX(f.time_played) AS time_played, MAX(f.seek) AS seek " \
 			  "FROM files f JOIN groups g ON f.songalbumid = g.persistentid %s " \
 			  "GROUP BY f.songalbumid %s %s %s;", qc->where, qc->having, qc->order, qc->index);
 
@@ -2232,11 +2236,12 @@ db_build_query_group_artists(struct query_params *qp, struct query_clause *qc)
   char *query;
 
   count = sqlite3_mprintf("SELECT COUNT(DISTINCT f.songartistid) FROM files f %s;", qc->where);
-  query = sqlite3_mprintf("SELECT " \
-			  "  g.id, g.persistentid, f.album_artist, f.album_artist_sort, COUNT(f.id) as track_count, " \
-			  "  COUNT(DISTINCT f.songalbumid) as album_count, f.album_artist, f.songartistid, " \
-			  "  SUM(f.song_length), MIN(f.data_kind), MIN(f.media_kind), MAX(f.year), MAX(f.date_released), " \
-			  "  MAX(f.time_added), MAX(f.time_played), MAX(f.seek) " \
+  query = sqlite3_mprintf("SELECT" \
+			  " g.id, g.persistentid, f.album_artist, f.album_artist_sort, COUNT(f.id) AS track_count," \
+			  " COUNT(DISTINCT f.songalbumid) AS album_count, f.album_artist, f.songartistid," \
+			  " SUM(f.song_length) AS song_length, MIN(f.data_kind) AS data_kind, MIN(f.media_kind) AS media_kind," \
+			  " MAX(f.year) AS year, MAX(f.date_released) AS date_released," \
+			  " MAX(f.time_added) AS time_added, MAX(f.time_played) AS time_played, MAX(f.seek) AS seek " \
 			  "FROM files f JOIN groups g ON f.songartistid = g.persistentid %s " \
 			  "GROUP BY f.songartistid %s %s %s;",
 			  qc->where, qc->having, qc->order, qc->index);
@@ -2318,9 +2323,11 @@ db_build_query_browse(struct query_params *qp, struct query_clause *qc)
   where  = browse_clause[qp->type & ~Q_F_BROWSE].where;
 
   count = sqlite3_mprintf("SELECT COUNT(*) FROM (SELECT %s FROM files f %s AND %s != '' %s);", select, qc->where, where, qc->group);
-  query = sqlite3_mprintf("SELECT %s, COUNT(f.id) as track_count, COUNT(DISTINCT f.songalbumid) as album_count, COUNT(DISTINCT f.songartistid) as artist_count, "
-			  "  SUM(f.song_length), MIN(f.data_kind), MIN(f.media_kind), MAX(f.year), MAX(f.date_released), "
-			  "  MAX(f.time_added), MAX(f.time_played), MAX(f.seek) FROM files f %s AND %s != '' %s %s %s;",
+  query = sqlite3_mprintf("SELECT %s, COUNT(f.id) AS track_count, COUNT(DISTINCT f.songalbumid) AS album_count, COUNT(DISTINCT f.songartistid) AS artist_count,"
+			  " SUM(f.song_length) AS song_length, MIN(f.data_kind) AS data_kind, MIN(f.media_kind) AS media_kind,"
+			  " MAX(f.year) AS year, MAX(f.date_released) AS date_released,"
+			  " MAX(f.time_added) AS time_added, MAX(f.time_played) AS time_played, MAX(f.seek) AS seek "
+			  "FROM files f %s AND %s != '' %s %s %s;",
 			  select, qc->where, where, qc->group, qc->order, qc->index);
 
   return db_build_query_check(qp, count, query);
@@ -5160,6 +5167,8 @@ db_queue_add_by_query(struct query_params *qp, char reshuffle, uint32_t item_id,
   int queue_version;
   uint32_t queue_count;
   int pos;
+  int shuffle_pos;
+  bool append_to_queue;
   int ret;
 
   if (new_item_id)
@@ -5189,16 +5198,26 @@ db_queue_add_by_query(struct query_params *qp, char reshuffle, uint32_t item_id,
       return 0;
     }
 
-  if (position < 0 || position > queue_count)
+  append_to_queue = (position < 0 || position > queue_count);
+
+  if (append_to_queue)
     {
       pos = queue_count;
+      shuffle_pos = queue_count;
     }
   else
     {
       pos = position;
+      shuffle_pos = position;
 
       // Update pos for all items from the given position (make room for the new items in the queue)
       query = sqlite3_mprintf("UPDATE queue SET pos = pos + %d, queue_version = %d WHERE pos >= %d;", qp->results, queue_version, pos);
+      ret = db_query_run(query, 1, 0);
+      if (ret < 0)
+	goto end_transaction;
+
+      // and similary update on shuffle_pos
+      query = sqlite3_mprintf("UPDATE queue SET shuffle_pos = shuffle_pos + %d, queue_version = %d WHERE shuffle_pos >= %d;", qp->results, queue_version, pos);
       ret = db_query_run(query, 1, 0);
       if (ret < 0)
 	goto end_transaction;
@@ -5206,7 +5225,7 @@ db_queue_add_by_query(struct query_params *qp, char reshuffle, uint32_t item_id,
 
   while ((ret = db_query_fetch_file(&dbmfi, qp)) == 0)
     {
-      ret = queue_item_add_from_file(&dbmfi, pos, queue_count, queue_version);
+      ret = queue_item_add_from_file(&dbmfi, pos, shuffle_pos, queue_version);
 
       if (ret < 0)
 	{
@@ -5214,7 +5233,7 @@ db_queue_add_by_query(struct query_params *qp, char reshuffle, uint32_t item_id,
 	  break;
 	}
 
-      DPRINTF(E_DBG, L_DB, "Added song id %s (%s) to queue with item id %d\n", dbmfi.id, dbmfi.title, ret);
+      DPRINTF(E_DBG, L_DB, "Added (pos=%d shuffle_pos=%d reshuffle=%d req position=%d) song id %s (%s) to queue with item id %d\n", pos, shuffle_pos, reshuffle, position, dbmfi.id, dbmfi.title, ret);
 
       if (new_item_id && *new_item_id == 0)
 	*new_item_id = ret;
@@ -5222,7 +5241,7 @@ db_queue_add_by_query(struct query_params *qp, char reshuffle, uint32_t item_id,
 	(*count)++;
 
       pos++;
-      queue_count++;
+      shuffle_pos++;
     }
 
   if (ret > 0)
@@ -5233,8 +5252,10 @@ db_queue_add_by_query(struct query_params *qp, char reshuffle, uint32_t item_id,
   if (ret < 0)
     goto end_transaction;
 
-  // Reshuffle after adding new items
-  if (reshuffle)
+  // Reshuffle after adding new items, if no queue position was specified - this
+  // case would indicate an 'add next' condition where if shuffling invalidates
+  // the tracks added to 'next'
+  if (append_to_queue && reshuffle)
     {
       ret = queue_reshuffle(item_id, queue_version);
     }
@@ -6938,18 +6959,12 @@ db_open(void)
       return -1;
     }
 
-  errmsg = NULL;
   ret = sqlite3_load_extension(hdl, PKGLIBDIR "/" PACKAGE_NAME "-sqlext.so", NULL, &errmsg);
   if (ret != SQLITE_OK)
     {
-      if (errmsg)
-	{
-	  DPRINTF(E_LOG, L_DB, "Could not load SQLite extension: %s\n", errmsg);
-	  sqlite3_free(errmsg);
-	}
-      else
-	DPRINTF(E_LOG, L_DB, "Could not load SQLite extension: %s\n", sqlite3_errmsg(hdl));
+      DPRINTF(E_LOG, L_DB, "Could not load SQLite extension: %s\n", errmsg);
 
+      sqlite3_free(errmsg);
       sqlite3_close(hdl);
       return -1;
     }
@@ -7363,32 +7378,13 @@ db_init(void)
   int ret;
   int i;
 
-  // Consistency checks
-  if (ARRAY_SIZE(dbmfi_cols_map) != ARRAY_SIZE(mfi_cols_map))
-    {
-      DPRINTF(E_FATAL, L_DB, "BUG: mfi column maps are not in sync\n");
-      return -1;
-    }
-
-  if (ARRAY_SIZE(dbpli_cols_map) != ARRAY_SIZE(pli_cols_map))
-    {
-      DPRINTF(E_FATAL, L_DB, "BUG: pli column maps are not in sync\n");
-      return -1;
-    }
-
-  if (ARRAY_SIZE(qi_cols_map) != ARRAY_SIZE(qi_mfi_map))
-    {
-      DPRINTF(E_FATAL, L_DB, "BUG: queue_item column maps are not in sync\n");
-      return -1;
-    }
+  static_assert(ARRAY_SIZE(dbmfi_cols_map) == ARRAY_SIZE(mfi_cols_map), "mfi column maps are not in sync");
+  static_assert(ARRAY_SIZE(dbpli_cols_map) == ARRAY_SIZE(pli_cols_map), "pli column maps are not in sync");
+  static_assert(ARRAY_SIZE(qi_cols_map) == ARRAY_SIZE(qi_mfi_map), "queue_item column maps are not in sync");
 
   for (i = 0; i < ARRAY_SIZE(qi_cols_map); i++)
     {
-      if (qi_cols_map[i].offset == qi_mfi_map[i].qi_offset)
-	continue;
-
-      DPRINTF(E_FATAL, L_DB, "BUG: queue_item offset maps are not in sync (at %d)\n", i);
-      return -1;
+      assert(qi_cols_map[i].offset == qi_mfi_map[i].qi_offset);
     }
 
   db_path = cfg_getstr(cfg_getsec(cfg, "general"), "db_path");
