@@ -1737,9 +1737,9 @@ jsonapi_reply_outputs_put_byid(struct httpd_request *hreq)
     {
       selected = jparse_bool_from_obj(request, "selected");
       if (selected)
-	ret = player_speaker_enable(output_id);
+	      ret = player_speaker_enable(output_id);
       else
-	ret = player_speaker_disable(output_id);
+	      ret = player_speaker_disable(output_id);
     }
 
   if (ret == 0 && jparse_contains_key(request, "volume", json_type_int))
@@ -1752,7 +1752,7 @@ jsonapi_reply_outputs_put_byid(struct httpd_request *hreq)
     {
       pin = jparse_str_from_obj(request, "pin");
       if (pin)
-	ret = player_speaker_authorize(output_id, pin);
+	      ret = player_speaker_authorize(output_id, pin);
     }
 
   jparse_free(request);

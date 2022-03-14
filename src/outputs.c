@@ -556,18 +556,18 @@ outputs_device_get_next(uint64_t device_id, struct output_device *last_device)
 {
   struct output_device *device = outputs_device_list;
 
-      DPRINTF(E_WARN, L_PLAYER, "Searching device with id %" PRIu64 " starting at %p\n", device_id, last_device);
-
   if (last_device)
     device = last_device->next;
 
   for (; device; device = device->next)
     {
-      DPRINTF(E_WARN, L_PLAYER, "Checking device with id %" PRIu64 "\n", device_id);
       if (device_id == device->id) 
   	    return device;
 
       if (device_id == device->device_group_int_id)
+        return device;
+
+      if (device_id == device->playback_group_int_id)
         return device;
     }
 

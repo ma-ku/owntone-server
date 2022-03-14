@@ -3084,18 +3084,32 @@ static enum command_state
 speaker_authorize(void *arg, int *retval)
 {
   struct speaker_attr_param *param = arg;
-  struct output_device *device;
+  struct output_device *device = NULL;
+  bool found_speaker = false;
 
-  device = outputs_device_get(param->spk_id);
-  if (!device)
-    return COMMAND_END;
+  static enum command_state state = COMMAND_END;
+  *retval = -1;
 
-  *retval = outputs_device_authorize(device, param->pin, device_activate_cb);
+  while ((device = outputs_device_get_next(param->spk_id, device)) != NULL)
+    {        
+      found_speaker = true;
 
-  if (*retval > 0)
-    return COMMAND_PENDING; // async
+      DPRINTF(E_DBG, L_PLAYER, "Speaker authentication: '%s' (id=%" PRIu64 ")\n", device->name, param->spk_id);
 
-  return COMMAND_END;
+      *retval = outputs_device_authorize(device, param->pin, device_activate_cb);
+
+      if (*retval > 0)
+        state = COMMAND_PENDING; // async
+    }
+
+  if (!found_speaker)
+    {
+      DPRINTF(E_WARN, L_PLAYER, "Could not authorize speaker id %" PRIu64 ", speaker disappeared\n", param->spk_id);
+      *retval = -1;
+      return COMMAND_END;
+    }
+
+  return state;
 }
 
 static enum command_state
@@ -3132,48 +3146,68 @@ static enum command_state
 volume_setrel_speaker(void *arg, int *retval)
 {
   struct speaker_attr_param *vol_param = arg;
-  struct output_device *device;
+  struct output_device *device = NULL;
+  bool found_speaker = false;
 
-  device = outputs_device_get(vol_param->spk_id);
-  if (!device)
+  static enum command_state state = COMMAND_END;
+  *retval = -1;
+
+  while ((device = outputs_device_get_next(vol_param->spk_id, device)) != NULL)
+    {        
+      found_speaker = true;
+
+      DPRINTF(E_DBG, L_PLAYER, "Speaker volume: '%s' (id=%" PRIu64 ")\n", device->name, vol_param->spk_id);
+
+      outputs_device_volume_register(device, -1, vol_param->volume);
+
+      *retval = outputs_device_volume_set(device, device_volume_cb);
+      
+      if (*retval > 0)
+        state = COMMAND_PENDING; // async
+    }
+
+  if (!found_speaker)
     {
       DPRINTF(E_WARN, L_PLAYER, "Could not set volume for speaker id %" PRIu64 ", speaker disappeared\n", vol_param->spk_id);
       *retval = -1;
       return COMMAND_END;
     }
 
-  outputs_device_volume_register(device, -1, vol_param->volume);
-
-  *retval = outputs_device_volume_set(device, device_volume_cb);
-
-  if (*retval > 0)
-    return COMMAND_PENDING; // async
-
-  return COMMAND_END;
+  return state;
 }
 
 static enum command_state
 volume_setabs_speaker(void *arg, int *retval)
 {
   struct speaker_attr_param *vol_param = arg;
-  struct output_device *device;
+  struct output_device *device = NULL;
+  bool found_speaker = false;
 
-  device = outputs_device_get(vol_param->spk_id);
-  if (!device)
+  static enum command_state state = COMMAND_END;
+  *retval = -1;
+
+  while ((device = outputs_device_get_next(vol_param->spk_id, device)) != NULL)
+    {        
+      found_speaker = true;
+
+      DPRINTF(E_DBG, L_PLAYER, "Speaker volume: '%s' (id=%" PRIu64 ")\n", device->name, vol_param->spk_id);
+
+      outputs_device_volume_register(device, vol_param->volume, -1);
+
+      *retval = outputs_device_volume_set(device, device_volume_cb);
+
+      if (*retval > 0)
+        state = COMMAND_PENDING; // async
+    }
+
+  if (!found_speaker)
     {
       DPRINTF(E_WARN, L_PLAYER, "Could not set volume for speaker id %" PRIu64 ", speaker disappeared\n", vol_param->spk_id);
       *retval = -1;
       return COMMAND_END;
     }
 
-  outputs_device_volume_register(device, vol_param->volume, -1);
-
-  *retval = outputs_device_volume_set(device, device_volume_cb);
-
-  if (*retval > 0)
-    return COMMAND_PENDING; // async
-
-  return COMMAND_END;
+  return state;
 }
 
 static enum command_state
